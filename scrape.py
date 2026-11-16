@@ -56,6 +56,10 @@ def rule_samakal(p):
     return "kaler-kheya" in p and bool(re.search(r"\d{5,}", p)) and not p.startswith("/sub/")
 
 
+def rule_samakal_any(p):
+    return bool(re.search(r"/article/\d{5,}", p))
+
+
 def rule_kalerkantho(p):
     return p.startswith("/online/sahitya/") and bool(re.search(r"\d{5,}$", _last(p)))
 
@@ -79,7 +83,7 @@ SOURCES = {
                        pages=["https://www.prothomalo.com/fun",
                               "https://www.prothomalo.com/onnoalo",
                               "https://www.prothomalo.com/topic/%E0%A6%B8%E0%A6%BE%E0%A6%B9%E0%A6%BF%E0%A6%A4%E0%A7%8D%E0%A6%AF"]),
-    "samakal": dict(paper="সমকাল", names=["সমকাল", "Samakal", "দৈনিক সমকাল"], host="samakal.com", rule=rule_samakal,
+    "samakal": dict(paper="সমকাল", names=["সমকাল", "Samakal", "দৈনিক সমকাল"], host="samakal.com", rule=rule_samakal, rule2=rule_samakal_any,
                     pages=["https://samakal.com/sub/kaler-kheya"], n=5),
     "kalerkantho": dict(paper="কালের কণ্ঠ", names=["কালের কণ্ঠ", "Kaler Kantho", "kalerkantho"], host="kalerkantho.com",
                         rule=rule_kalerkantho, pages=["https://www.kalerkantho.com/online/sahitya"], n=5),
@@ -93,8 +97,13 @@ OUTPUTS = {
     "books": dict(title="The Daily Star - Books & Literature", link="https://www.thedailystar.net/culture/books-literature",
                   sources=["ds-books"]),
     "slow": dict(title="The Daily Star - Slow Reads", link="https://www.thedailystar.net/slow-reads", sources=["ds-slow"]),
-    "bangla": dict(title="বাংলা সাহিত্য (প্রথম আলো, সমকাল, কালের কণ্ঠ, যুগান্তর, আমার দেশ)", link="https://www.prothomalo.com/",
-                   sources=["prothomalo", "samakal", "kalerkantho", "jugantor", "amardesh"]),
+    # সমকাল ও কালের কণ্ঠ GitHub/প্রক্সি সবাইকে 403 দেয়, তাই এখন বন্ধ রাখা হয়েছে।
+    # আবার চালু করতে নিচের তালিকায় "samakal", "kalerkantho" যোগ করুন।
+    # শুধু ফোনের Termux থেকে চালানো হয় (python scrape.py bangla2), GitHub Actions এ নয়
+    "bangla2": dict(title="বাংলা সাহিত্য (সমকাল, কালের কণ্ঠ)", link="https://samakal.com/",
+                    sources=["samakal", "kalerkantho"]),
+    "bangla": dict(title="বাংলা সাহিত্য (প্রথম আলো, যুগান্তর, আমার দেশ)", link="https://www.prothomalo.com/",
+                   sources=["prothomalo", "jugantor", "amardesh"]),
 }
 
 HEADERS = {
@@ -212,6 +221,14 @@ def get_links(src, page_url, limit):
         if src["rule"](path):
             seen.add(path)
             links.append(origin + path)
+    if not links and src.get("rule2"):
+        for path in cands:
+            path = path.rstrip("/")
+            if path and path not in seen and src["rule2"](path):
+                seen.add(path)
+                links.append(origin + path)
+        if links:
+            log("  [নোট] কড়া নিয়মে মেলেনি, ঢিলা নিয়মে লিংক নেওয়া হলো")
     log(f"  matched {len(links)} article links")
     if not links and DEBUG:
         sample = []
@@ -455,7 +472,10 @@ def collect(src_key):
 def main():
     os.makedirs(OUT_DIR, exist_ok=True)
     ok = 0
+    wanted = sys.argv[1:] or [k for k in OUTPUTS if k != "bangla2"]
     for out_key, cfg in OUTPUTS.items():
+        if out_key not in wanted:
+            continue
         per_source = [collect(k) for k in cfg["sources"]]
         # সোর্সগুলো ঘুরিয়ে ঘুরিয়ে সাজানো, যাতে limit দিলেও সব পত্রিকা থেকে কিছু কিছু আসে
         items = []
