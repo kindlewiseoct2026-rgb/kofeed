@@ -9,6 +9,8 @@ GitHub Actions এ চলে, docs/ ফোল্ডারে XML ফাইল �
 """
 import os
 import re
+import shutil
+import subprocess
 import sys
 import time
 from datetime import datetime, timezone, timedelta
@@ -132,6 +134,19 @@ def _m_direct(url):
     return r.status_code, r.text
 
 
+def _m_curl(url):
+    # সিস্টেমের curl (HTTP/2 + অন্যরকম ফিঙ্গারপ্রিন্ট) — python requests আটকালে কখনও কাজ করে
+    if not shutil.which("curl"):
+        raise RuntimeError("curl নেই")
+    cmd = ["curl", "-sSL", "--compressed", "--max-time", "30", "-A", HEADERS["User-Agent"],
+           "-H", "Accept: " + HEADERS["Accept"], "-H", "Accept-Language: " + HEADERS["Accept-Language"],
+           "-H", "Upgrade-Insecure-Requests: 1", "-w", "\n%{http_code}", url]
+    out = subprocess.run(cmd, capture_output=True, timeout=45)
+    data = out.stdout.decode("utf-8", "replace")
+    body, _, code = data.rpartition("\n")
+    return (int(code) if code.strip().isdigit() else 0), body
+
+
 def _m_cffi(url):
     if cffi_requests is None:
         raise RuntimeError("curl_cffi নেই")
@@ -151,7 +166,7 @@ def _m_jina(url):
     return r.status_code, r.text
 
 
-METHODS = [("direct", _m_direct), ("cffi", _m_cffi), ("jina", _m_jina)]
+METHODS = [("direct", _m_direct), ("curl", _m_curl), ("cffi", _m_cffi), ("jina", _m_jina)]
 _host_method = {}  # যে হোস্টে যে পদ্ধতি কাজ করেছে, সেটা মনে রাখা
 
 
