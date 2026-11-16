@@ -19,6 +19,11 @@ from xml.sax.saxutils import escape
 import requests
 from bs4 import BeautifulSoup
 
+try:  # ব্রাউজারের মতো TLS ফিঙ্গারপ্রিন্ট (কিছু সাইটের বট-ব্লক এড়াতে)
+    from curl_cffi import requests as cffi_requests
+except Exception:
+    cffi_requests = None
+
 OUT_DIR = os.environ.get("OUT_DIR", "docs")
 BD = timezone(timedelta(hours=6))
 DEBUG = os.environ.get("DEBUG", "1") == "1"
@@ -107,22 +112,66 @@ def log(*a):
     print(*a, flush=True)
 
 
-def get(url, tries=3):
+def _looks_blocked(text):
+    t = text[:3000].lower()
+    return len(text) < 400 or "just a moment" in t or "cf-browser-verification" in t or "attention required" in t
+
+
+def _m_direct(url):
+    r = SESSION.get(url, timeout=30)
+    r.encoding = "utf-8"
+    return r.status_code, r.text
+
+
+def _m_cffi(url):
+    if cffi_requests is None:
+        raise RuntimeError("curl_cffi নেই")
+    r = cffi_requests.get(url, impersonate="chrome", timeout=30, headers={"Accept-Language": HEADERS["Accept-Language"]})
+    r.encoding = "utf-8"
+    return r.status_code, r.text
+
+
+def _m_jina(url):
+    # শেষ ভরসা: Jina Reader সার্ভার থেকে পেজটা এনে দেয় (ফ্রি, প্রতি মিনিটে ~২০ রিকোয়েস্ট)
+    time.sleep(3.5)
+    h = {"X-Return-Format": "html", "Accept": "text/html"}
+    if os.environ.get("JINA_API_KEY"):
+        h["Authorization"] = "Bearer " + os.environ["JINA_API_KEY"]
+    r = requests.get("https://r.jina.ai/" + url, headers=h, timeout=60)
+    r.encoding = "utf-8"
+    return r.status_code, r.text
+
+
+METHODS = [("direct", _m_direct), ("cffi", _m_cffi), ("jina", _m_jina)]
+_host_method = {}  # যে হোস্টে যে পদ্ধতি কাজ করেছে, সেটা মনে রাখা
+
+
+def get(url, tries=2):
     if url in _page_cache:
         return _page_cache[url]
-    for i in range(tries):
-        try:
-            r = SESSION.get(url, timeout=30)
-            if r.status_code == 200:
-                r.encoding = "utf-8"
-                _page_cache[url] = r.text
-                return r.text
-            log(f"    HTTP {r.status_code} for {url}")
-            if r.status_code in (403, 404, 410):
+    host = urlparse(url).netloc
+    start = _host_method.get(host, 0)
+    for mi in range(start, len(METHODS)):
+        name, fn = METHODS[mi]
+        for i in range(tries):
+            try:
+                code, text = fn(url)
+            except Exception as e:
+                log(f"    [{name}] error {type(e).__name__}: {e} for {url}")
                 break
-        except requests.RequestException as e:
-            log(f"    error {e} for {url}")
-        time.sleep(2 * (i + 1))
+            if code == 200 and not _looks_blocked(text):
+                if mi != 0:
+                    log(f"    [{name}] ok for {url}")
+                _host_method[host] = mi
+                _page_cache[url] = text
+                return text
+            log(f"    [{name}] HTTP {code} for {url}")
+            if code in (404, 410):
+                _page_cache[url] = ""
+                return ""
+            if code in (403, 401):
+                break  # এই পদ্ধতিতে আটকাচ্ছে, পরের পদ্ধতি
+            time.sleep(2 * (i + 1))
     _page_cache[url] = ""
     return ""
 
